@@ -14,7 +14,7 @@
             color: #333;
         }
         .container {
-            max-width: 600px;
+            max-width: 650px;
             margin: 40px auto;
             padding: 30px;
             background-color: #ffffff;
@@ -30,7 +30,7 @@
             width: 100%;
             min-height: 180px;
             padding: 15px;
-            margin-bottom: 5px; /* Adjusted margin */
+            margin-bottom: 5px;
             box-sizing: border-box;
             border: 1px solid #ccc;
             border-radius: 8px;
@@ -65,6 +65,12 @@
             text-align: right;
             font-size: 14px;
         }
+        .action-buttons {
+            display: flex; 
+            gap: 10px; 
+            justify-content: center;
+            margin-top: 10px;
+        }
         .action-buttons button {
             padding: 12px 15px;
             font-size: 16px;
@@ -96,6 +102,13 @@
         #resume-button:hover:not(:disabled) {
             background-color: #138496;
         }
+        #download-button {
+            background-color: #007bff; 
+            color: white;
+        }
+        #download-button:hover:not(:disabled) {
+            background-color: #0056b3; 
+        }
         button:disabled {
             opacity: 0.6;
             cursor: not-allowed;
@@ -104,6 +117,7 @@
             margin-top: 15px;
             font-size: 15px;
             color: #dc3545;
+            min-height: 20px;
         }
         .char-counter {
             text-align: right; 
@@ -117,7 +131,7 @@
     <div class="container">
         <h1>🗣️ SpeakSync (Text-to-Speech Generator)</h1>
 
-        <textarea id="text-input" placeholder="Enter the text you want to convert to speech..." rows="8">Hello! I am a web page hosted on GitHub. Use the controls below to select a voice and adjust the speed and pitch before clicking 'Listen'.</textarea>
+        <textarea id="text-input" placeholder="Enter the text you want to convert to speech..." rows="8">Welcome to SpeakSync! Type your text here and click 'Listen' or 'Download'.</textarea>
         
         <div class="char-counter">
             Characters: <span id="char-count">0</span>
@@ -142,13 +156,17 @@
             </div>
         </div>
         
-        <div class="action-buttons" style="display: flex; gap: 10px; justify-content: center;">
+        <div class="action-buttons">
             <button id="listen-button">🔊 Listen</button>
             <button id="pause-button" disabled>⏸️ Pause</button>
             <button id="resume-button" disabled>▶️ Resume</button>
+            <button id="download-button">⬇️ Download</button>
         </div>
-
+        
         <div class="status-message" id="status-message"></div>
+        <p style="font-size: 12px; color: #aaa; margin-top: 15px;">
+            **Note on Download:** The download feature is experimental and uses the browser's MediaRecorder API. It requires **microphone permission** to capture speaker output and saves the file as a **.webm** audio format.
+        </p>
     </div>
 
     <script>
@@ -160,12 +178,16 @@
         const pitchRange = document.getElementById('pitch-range');
         const pitchValue = document.getElementById('pitch-value');
         const listenButton = document.getElementById('listen-button');
-        const pauseButton = document.getElementById('pause-button'); // New
-        const resumeButton = document.getElementById('resume-button'); // New
+        const pauseButton = document.getElementById('pause-button');
+        const resumeButton = document.getElementById('resume-button');
+        const downloadButton = document.getElementById('download-button');
         const statusMessage = document.getElementById('status-message');
-        const charCount = document.getElementById('char-count'); // New
+        const charCount = document.getElementById('char-count');
         
         let voices = [];
+        let mediaRecorder;
+        let audioChunks = [];
+        let audioStream; 
 
         // --- Voice Initialization ---
         function populateVoiceList() {
@@ -177,9 +199,9 @@
                 return 0;
             });
 
-            voiceSelect.innerHTML = ''; // Clear previous options
+            voiceSelect.innerHTML = ''; 
             if (voices.length === 0) {
-                 statusMessage.textContent = '⚠️ No voices available. Check browser settings.';
+                 statusMessage.textContent = '⚠️ No voices available. Check browser settings (and try Chrome/Edge).';
                  return;
             }
 
@@ -187,79 +209,160 @@
                 const option = document.createElement('option');
                 option.textContent = `${voices[i].name} (${voices[i].lang})`;
                 
-                // Select a default voice (e.g., English)
                 if (voices[i].default) {
                     option.selected = true;
                 }
-                option.setAttribute('data-lang', voices[i].lang);
                 option.setAttribute('data-name', voices[i].name);
                 voiceSelect.appendChild(option);
             }
             voiceSelect.disabled = false;
         }
 
-        // Browsers often load voices asynchronously, so we wait for the event
         populateVoiceList();
         if (synth.onvoiceschanged !== undefined) {
             synth.onvoiceschanged = populateVoiceList;
         }
 
-        // --- Speech Synthesis Function ---
-        function speak() {
-            if (synth.speaking) {
-                synth.cancel(); // Stop any current speech before starting a new one
+        // --- Recording Functions ---
+
+        async function startRecording() {
+            // Request microphone access to capture speaker audio output (browser requirement)
+            try {
+                audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err) {
+                statusMessage.textContent = '❌ Download failed: Microphone access required for recording output.';
+                return;
             }
 
+            audioChunks = [];
+            
+            // Define MIME type for maximum compatibility, webm is common
+            let mimeType = MediaRecorder.isTypeSupported('audio/webm; codecs=opus') 
+                         ? 'audio/webm; codecs=opus' 
+                         : 'audio/webm';
+                         
+            mediaRecorder = new MediaRecorder(audioStream, { mimeType: mimeType });
+
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                // This is called when mediaRecorder.stop() is executed
+                stopRecordingCleanup();
+            };
+
+            mediaRecorder.start();
+        }
+
+        function stopRecordingCleanup() {
+            // Stop the microphone/stream track to free up resources
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+            }
+
+            // Create the audio Blob and trigger download
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            
+            const downloadLink = document.createElement('a');
+            downloadLink.href = audioUrl;
+            downloadLink.download = `speaksync_${Date.now()}.webm`;
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+            
+            statusMessage.textContent = '✅ Audio saved successfully as .webm!';
+        }
+
+        // --- Speech Synthesis Function ---
+        let isDownloading = false;
+
+        function speak() {
             const text = textInput.value.trim();
             if (text === '') {
                 statusMessage.textContent = '❌ Please enter some text to synthesize.';
                 return;
             }
             
+            // 1. Cancel any ongoing speech
+            if (synth.speaking) {
+                synth.cancel(); 
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    // Force stop recording if new speech starts
+                    mediaRecorder.stop(); 
+                }
+            }
+
             statusMessage.textContent = '';
             
             const utterance = new SpeechSynthesisUtterance(text);
             
-            // Set parameters
+            // Set voice and parameters
             const selectedOption = voiceSelect.selectedOptions[0].getAttribute('data-name');
             utterance.voice = voices.find(voice => voice.name === selectedOption) || voices[0];
             utterance.rate = parseFloat(rateRange.value);
             utterance.pitch = parseFloat(pitchRange.value);
 
-            // Event listeners for status updates (Updated for Pause/Resume)
+            // Event listeners for status updates
             utterance.onstart = () => {
-                listenButton.textContent = '... Speaking';
+                listenButton.textContent = isDownloading ? '... Recording' : '... Speaking';
                 listenButton.disabled = true;
-                pauseButton.disabled = false; // Enable Pause when speaking
-                resumeButton.disabled = true; // Ensure Resume is disabled
+                pauseButton.disabled = true;
+                resumeButton.disabled = true;
+
+                if (isDownloading) {
+                    // Only start recording if the user clicked download
+                    startRecording(); 
+                }
             };
             
             utterance.onend = () => {
                 listenButton.textContent = '🔊 Listen';
                 listenButton.disabled = false;
-                pauseButton.disabled = true; // Disable Pause/Resume when finished
+                pauseButton.disabled = true;
                 resumeButton.disabled = true;
+                
+                if (isDownloading) {
+                    // Stop recording when speech ends, which triggers the download
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop(); 
+                    }
+                    isDownloading = false; // Reset flag
+                }
             };
 
             utterance.onerror = (event) => {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                }
                 listenButton.textContent = '🔊 Listen';
                 listenButton.disabled = false;
                 pauseButton.disabled = true; 
                 resumeButton.disabled = true;
-                statusMessage.textContent = `❌ Speech error: ${event.error}`;
-                console.error('Speech synthesis error:', event.error);
+                isDownloading = false;
+                statusMessage.textContent = `❌ Speech error: ${event.error}.`;
             };
             
             synth.speak(utterance);
         }
 
         // --- Event Listeners ---
-        listenButton.addEventListener('click', speak);
+        listenButton.addEventListener('click', () => {
+            isDownloading = false; // Playback mode
+            speak();
+        });
 
-        // Feature 1: Pause and Resume Handlers
+        downloadButton.addEventListener('click', () => {
+            isDownloading = true; // Download mode
+            speak();
+        });
+        
+        // Pause and Resume Handlers
         pauseButton.addEventListener('click', () => {
             if (synth.speaking && !synth.paused) {
                 synth.pause();
+                // We do not pause the MediaRecorder as that's unreliable
                 pauseButton.disabled = true;
                 resumeButton.disabled = false;
             }
@@ -273,7 +376,7 @@
             }
         });
         
-        // Feature 2: Character Counter Handler
+        // Character Counter Handler
         textInput.addEventListener('input', () => {
             charCount.textContent = textInput.value.length;
         });
@@ -287,17 +390,8 @@
             pitchValue.textContent = pitchRange.value;
         });
         
-        // Allow pressing Enter to listen
-        textInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                speak();
-            }
-        });
+        textInput.dispatchEvent(new Event('input')); // Initial count
         
-        // Set initial character count
-        textInput.dispatchEvent(new Event('input')); 
-
     </script>
 </body>
 </html>
